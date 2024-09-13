@@ -1,6 +1,7 @@
 package telco.conversion_formato.Controllers;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
@@ -101,45 +102,73 @@ public ResponseEntity<?> convertXlsxToJson(@RequestBody Map<String, String> body
 }
 
 
-    @PostMapping("/csv-to-json")
-    public ResponseEntity<?> convertCsvToJson(@RequestBody Map<String, String> body) {
-        try {
-            //extraer el contenido del base64 que viene en el request body
-            String base64File = body.get("base64File");
-            System.out.println("Longitud de la cadena Base64: " + base64File.length());
-    
-            //decodificar el base64
-            byte[] fileBytes = Base64.getDecoder().decode(base64File);
-            System.out.println("Longitud de bytes decodificados: " + fileBytes.length);
-    
-            //pasar los bytes decodificados al InputStream para procesar el csv
-            InputStream inputStream = new ByteArrayInputStream(fileBytes);
-            CSVReader reader = new CSVReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
-            
-            //leer el csv, o sea los datos
-            List<String[]> csvData = reader.readAll();
-            List<Map<String, String>> jsonData = new ArrayList<>();
-            String[] headers = csvData.get(0);
-    
-            //Convertir cada fila del csv a un objeto jsn
-            for (int i = 1; i < csvData.size(); i++) {
-                Map<String, String> rowData = new HashMap<>();
-                for (int j = 0; j < headers.length; j++) {
-                    rowData.put(headers[j], csvData.get(i)[j]);
+@PostMapping("/csv-to-json")
+public ResponseEntity<?> convertCsvToJson(@RequestBody Map<String, String> body) {
+    try {
+        // Extraer el contenido del base64 que viene en el request body
+        String base64File = body.get("base64File");
+        System.out.println("Longitud de la cadena Base64: " + base64File.length());
+
+        // Decodificar el base64
+        byte[] fileBytes = Base64.getDecoder().decode(base64File);
+        System.out.println("Longitud de bytes decodificados: " + fileBytes.length);
+
+        // Pasar los bytes decodificados al InputStream para procesar el CSV
+        InputStream inputStream = new ByteArrayInputStream(fileBytes);
+        CSVReader reader = new CSVReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
+
+        // Leer el csv
+        List<String[]> csvData = reader.readAll();
+        List<Map<String, String>> jsonData = new ArrayList<>();
+        
+        // Validar que tengamos suficientes datos
+        if (csvData.size() < 2) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("El archivo CSV no contiene suficientes datos.");
+        }
+
+        // Usamos la fila 2 (índice 1) como encabezados, ignorando las primeras filas
+        String[] headers = csvData.get(1); 
+
+        // Convertir cada fila del CSV a un objeto JSON, ignorando celdas vacías
+        for (int i = 2; i < csvData.size(); i++) {
+            if (csvData.get(i).length != headers.length) {
+                // Si una fila tiene un número diferente de columnas, lo ignoramos
+                System.out.println("Fila ignorada por tener un número diferente de columnas: " + i);
+                continue;
+            }
+
+            Map<String, String> rowData = new HashMap<>();
+            boolean hasData = false;
+
+            for (int j = 0; j < headers.length; j++) {
+                String header = headers[j].trim();
+                String value = csvData.get(i)[j] != null ? csvData.get(i)[j].trim() : "";
+
+                if (!value.isEmpty()) {
+                    hasData = true;
                 }
+
+                rowData.put(header, value);
+            }
+
+            if (hasData) {
                 jsonData.add(rowData);
             }
-    
-            //Convertir los datos a jsno
-            String json = objectMapper.writeValueAsString(jsonData);
-            return ResponseEntity.ok(json);
-    
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Error al decodificar el archivo Base64: " + e.getMessage());
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error al convertir CSV a JSON: " + e.getMessage());
         }
+
+        // Convertir los datos a JSON
+        String json = objectMapper.writeValueAsString(jsonData);
+        return ResponseEntity.ok(json);
+
+    } catch (IllegalArgumentException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Error al decodificar el archivo Base64: " + e.getMessage());
+    } catch (Exception e) {
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error al convertir CSV a JSON: " + e.getMessage());
     }
+}
+
+
+
 
     
     @PostMapping("/json-to-xlsx")
