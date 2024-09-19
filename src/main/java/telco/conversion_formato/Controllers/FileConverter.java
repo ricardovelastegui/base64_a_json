@@ -1,5 +1,6 @@
 package telco.conversion_formato.Controllers;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -8,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.opencsv.CSVReader;
 
 import java.nio.charset.StandardCharsets;
@@ -35,63 +38,53 @@ public class FileConverter {
     @PostMapping("/xlsx-to-json")
 public ResponseEntity<?> convertXlsxToJson(@RequestBody Map<String, String> body) {
     try {
-        //obtener el base64 del request body, pilas usar el 'file' como clave
         String base64File = body.get("file");
         if (base64File == null || base64File.isEmpty()) {
             return ResponseEntity.badRequest().body("Archivo Base64 no proporcionado");
         }
 
-        //decodificar el base64 a bytes
         byte[] fileBytes = Base64.getDecoder().decode(base64File);
         InputStream inputStream = new ByteArrayInputStream(fileBytes);
-        
-        //abrir el archivo Excel
         Workbook workbook = new XSSFWorkbook(inputStream);
-        Sheet sheet = workbook.getSheetAt(0);  // Toma la primera hoja del Excel
-        List<Map<String, String>> jsonData = new ArrayList<>();
 
-        //leer la primera fila como encabezado
-        // Row headerRow = sheet.getRow(0);
-        // for (int i = 1; i < sheet.getPhysicalNumberOfRows(); i++) {
-        //     Row row = sheet.getRow(i);
-        //     Map<String, String> rowData = new HashMap<>();
-        //     for (int j = 0; j < row.getPhysicalNumberOfCells(); j++) {
-        //         rowData.put(headerRow.getCell(j).getStringCellValue(), row.getCell(j).toString());
-        //     }
-        //     jsonData.add(rowData);
-        // }
-
-        for (int rowIndex = 0; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
-            Row row = sheet.getRow(rowIndex);
-
-            
-            if (row == null || row.getPhysicalNumberOfCells() == 0) {
-                continue;  //Saltar filas vacias
-            }
-
-            //crear un map para almacenar los datos de la fila
-            Map<String, String> rowData = new HashMap<>();
-
-            //recorrer todas las celdas de la fila
-            for (int cellIndex = 0; cellIndex < row.getLastCellNum(); cellIndex++) {
-                Cell cell = row.getCell(cellIndex);
-
-                
-                if (cell == null) {
-                    continue; //saltar celdas vacias
-                }
-
-                //obtener el valor de la celda como strin
-                String cellValue = cell.toString();
-                rowData.put("Columna" + (cellIndex + 1), cellValue); // Ajusta los nombres de columna según sea necesario
-            }
-
-            //agregar los datos de la fila al jsondata
-            jsonData.add(rowData);
-        }
-        //Convierte los datos a json
         ObjectMapper objectMapper = new ObjectMapper();
-        String json = objectMapper.writeValueAsString(jsonData);
+        ObjectNode jsonOutput = objectMapper.createObjectNode();  // Usar ObjectNode para crear un objeto JSON
+
+        DataFormatter dataFormatter = new DataFormatter();
+
+        // Procesar cada hoja en el libro
+        for (int sheetIndex = 0; sheetIndex < workbook.getNumberOfSheets(); sheetIndex++) {
+            Sheet sheet = workbook.getSheetAt(sheetIndex);
+            String sheetName = workbook.getSheetName(sheetIndex);
+            List<Map<String, String>> jsonData = new ArrayList<>();
+
+            Row headerRow = sheet.getRow(sheet.getFirstRowNum());
+            List<String> headers = new ArrayList<>();
+            for (Cell cell : headerRow) {
+                headers.add(dataFormatter.formatCellValue(cell).trim());
+            }
+
+            for (int rowIndex = sheet.getFirstRowNum() + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                Row row = sheet.getRow(rowIndex);
+                if (row == null) continue;  // Saltar filas vacías
+
+                Map<String, String> rowData = new LinkedHashMap<>();
+                for (int cellIndex = row.getFirstCellNum(); cellIndex < row.getLastCellNum(); cellIndex++) {
+                    Cell cell = row.getCell(cellIndex);
+                    if (cell != null) {  // Solo agregar celdas no vacías
+                        String cellValue = dataFormatter.formatCellValue(cell);
+                        rowData.put(headers.get(cellIndex), cellValue);
+                    }
+                }
+                if (!rowData.isEmpty()) {
+                    jsonData.add(rowData);
+                }
+            }
+
+            jsonOutput.set(sheetName, objectMapper.valueToTree(jsonData));  // Agregar la lista de mapas a la hoja correspondiente
+        }
+
+        String json = objectMapper.writeValueAsString(jsonOutput);
         return ResponseEntity.ok(json);
 
     } catch (IllegalArgumentException e) {
@@ -102,61 +95,59 @@ public ResponseEntity<?> convertXlsxToJson(@RequestBody Map<String, String> body
 }
 
 
+    
+
+
+
+
 @PostMapping("/csv-to-json")
 public ResponseEntity<?> convertCsvToJson(@RequestBody Map<String, String> body) {
     try {
-        // Extraer el contenido del base64 que viene en el request body
         String base64File = body.get("base64File");
-        System.out.println("Longitud de la cadena Base64: " + base64File.length());
-
-        // Decodificar el base64
         byte[] fileBytes = Base64.getDecoder().decode(base64File);
-        System.out.println("Longitud de bytes decodificados: " + fileBytes.length);
-
-        // Pasar los bytes decodificados al InputStream para procesar el CSV
         InputStream inputStream = new ByteArrayInputStream(fileBytes);
-        CSVReader reader = new CSVReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
+        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
 
-        // Leer el csv
-        List<String[]> csvData = reader.readAll();
-        List<Map<String, String>> jsonData = new ArrayList<>();
-        
-        // Validar que tengamos suficientes datos
-        if (csvData.size() < 2) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("El archivo CSV no contiene suficientes datos.");
+        String line;
+        List<String[]> csvData = new ArrayList<>();
+        while ((line = reader.readLine()) != null) {
+            if (!line.isEmpty()) {
+                csvData.add(line.split(","));
+            }
         }
 
-        // Usamos la fila 2 (índice 1) como encabezados, ignorando las primeras filas
-        String[] headers = csvData.get(1); 
+        if (csvData.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("El archivo CSV está vacío.");
+        }
 
-        // Convertir cada fila del CSV a un objeto JSON, ignorando celdas vacías
-        for (int i = 2; i < csvData.size(); i++) {
-            if (csvData.get(i).length != headers.length) {
-                // Si una fila tiene un número diferente de columnas, lo ignoramos
-                System.out.println("Fila ignorada por tener un número diferente de columnas: " + i);
-                continue;
+        // Validación del encabezado
+        String[] expectedHeaders = {"nombre", "apellido", "ciudad", "codigo_postal", "ruc", "fecha_nacimiento", "telefono", "correo_electronico", "genero"};
+        String[] headers = csvData.get(0);
+
+        if (headers.length != expectedHeaders.length) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("La cantidad de elementos en el encabezado no coincide con lo esperado.");
+        }
+
+        for (int i = 0; i < headers.length; i++) {
+            if (!headers[i].trim().equalsIgnoreCase(expectedHeaders[i])) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("El encabezado del CSV no tiene el formato correcto. Se esperaba: " + Arrays.toString(expectedHeaders));
+            }
+        }
+
+        List<Map<String, String>> jsonData = new ArrayList<>();
+        for (int i = 1; i < csvData.size(); i++) {
+            String[] row = csvData.get(i);
+            if (row.length != headers.length) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("La fila " + (i + 1) + " no tiene la misma cantidad de elementos que el encabezado.");
             }
 
             Map<String, String> rowData = new HashMap<>();
-            boolean hasData = false;
-
-            for (int j = 0; j < headers.length; j++) {
-                String header = headers[j].trim();
-                String value = csvData.get(i)[j] != null ? csvData.get(i)[j].trim() : "";
-
-                if (!value.isEmpty()) {
-                    hasData = true;
-                }
-
-                rowData.put(header, value);
+            for (int j = 0; j < row.length; j++) {
+                rowData.put(headers[j], row[j]);
             }
-
-            if (hasData) {
-                jsonData.add(rowData);
-            }
+            jsonData.add(rowData);
         }
 
-        // Convertir los datos a JSON
         String json = objectMapper.writeValueAsString(jsonData);
         return ResponseEntity.ok(json);
 
@@ -166,6 +157,7 @@ public ResponseEntity<?> convertCsvToJson(@RequestBody Map<String, String> body)
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error al convertir CSV a JSON: " + e.getMessage());
     }
 }
+
 
 
 
